@@ -6,7 +6,10 @@
  *
  * Usage: npm run server (or: npx tsx server/index.ts)
  */
-import 'dotenv/config';
+import dotenv from 'dotenv';
+// Load .env.local first (like Vite does), then fall back to .env
+dotenv.config({ path: '.env.local' });
+dotenv.config({ path: '.env' });
 import express from 'express';
 import cors from 'cors';
 import { fal } from '@fal-ai/client';
