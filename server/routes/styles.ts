@@ -9,6 +9,7 @@ import {
     submitTrainingJob,
     pollTrainingStatus,
     getStyleRecords,
+    saveRecords,
 } from '../services/falTraining.js';
 import type { ApiResponse, StyleRecord, TrainingStatusResponse, StyleType } from '../types/index.js';
 import { randomUUID } from 'crypto';
@@ -178,6 +179,7 @@ router.delete('/:styleId', (req: Request, res: Response): void => {
     }
 
     records.delete(styleId);
+    saveRecords();
     const response: ApiResponse<{ deleted: boolean }> = {
         success: true,
         data: { deleted: true },

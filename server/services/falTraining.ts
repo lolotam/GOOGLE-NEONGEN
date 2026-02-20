@@ -7,23 +7,66 @@
  */
 import { fal } from '@fal-ai/client';
 import archiver from 'archiver';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import type { StyleRecord, TrainingStatus, StyleType } from '../types/index.js';
 import { TRIGGER_WORD } from '../types/index.js';
 
 /** fal.ai training model endpoint */
 const TRAINING_MODEL = 'fal-ai/flux-2-trainer';
 
-/** In-memory store for all style/training records */
-const styleRecords = new Map<string, StyleRecord>();
+// ── File-backed persistence ──────────────────────────────────
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_DIR = path.resolve(__dirname, '..', '..', 'data');
+const STYLES_FILE = path.join(DATA_DIR, 'styles.json');
+
+/** Load records from disk on startup */
+function loadRecords(): Map<string, StyleRecord> {
+    try {
+        if (fs.existsSync(STYLES_FILE)) {
+            const raw = fs.readFileSync(STYLES_FILE, 'utf-8');
+            const entries: [string, StyleRecord][] = JSON.parse(raw);
+            console.log(`[Persistence] Loaded ${entries.length} style records from ${STYLES_FILE}`);
+            return new Map(entries);
+        }
+    } catch (err) {
+        console.error('[Persistence] Failed to load styles.json, starting fresh:', err);
+    }
+    return new Map();
+}
+
+/** Save records to disk */
+function saveRecords(): void {
+    try {
+        if (!fs.existsSync(DATA_DIR)) {
+            fs.mkdirSync(DATA_DIR, { recursive: true });
+        }
+        const entries = Array.from(styleRecords.entries());
+        fs.writeFileSync(STYLES_FILE, JSON.stringify(entries, null, 2), 'utf-8');
+    } catch (err) {
+        console.error('[Persistence] Failed to save styles.json:', err);
+    }
+}
+
+/** Style records backed by data/styles.json */
+const styleRecords = loadRecords();
 
 /**
- * Returns the in-memory style records Map.
+ * Returns the style records Map.
  * Used by routes to access and manipulate style data.
  * @returns The Map containing all StyleRecord entries
  */
 export function getStyleRecords(): Map<string, StyleRecord> {
     return styleRecords;
 }
+
+/**
+ * Saves the current state of records to disk.
+ * Call this after any mutation to the records Map.
+ */
+export { saveRecords };
 
 /**
  * Compresses an array of file buffers into a single ZIP archive buffer.
@@ -142,6 +185,7 @@ export async function submitTrainingJob(
         createdAt: Date.now(),
     };
     styleRecords.set(styleId, record);
+    saveRecords();
 
     try {
         // Step 1: Compress images to ZIP
@@ -181,6 +225,7 @@ export async function submitTrainingJob(
         record.falRequestId = request_id;
         record.logs.push('Training job accepted — waiting for resources...');
         styleRecords.set(styleId, record);
+        saveRecords();
 
         return record;
     } catch (error) {
@@ -188,6 +233,7 @@ export async function submitTrainingJob(
         record.status = 'failed';
         record.errorMessage = mapFalError(error);
         styleRecords.set(styleId, record);
+        saveRecords();
         throw new Error(record.errorMessage);
     }
 }
@@ -261,6 +307,7 @@ export async function pollTrainingStatus(styleId: string): Promise<{
             record.configUrl = configFile?.url || '';
             record.logs.push('Training complete! LoRA weights ready.');
             styleRecords.set(styleId, record);
+            saveRecords();
 
             return {
                 status: 'completed' as TrainingStatus,
@@ -274,6 +321,7 @@ export async function pollTrainingStatus(styleId: string): Promise<{
             record.errorMessage = 'Training failed on fal.ai';
             record.progress = 0;
             styleRecords.set(styleId, record);
+            saveRecords();
 
             return {
                 status: 'failed' as TrainingStatus,
@@ -293,6 +341,7 @@ export async function pollTrainingStatus(styleId: string): Promise<{
                 record.progress = Math.max(record.progress, logProgress);
             }
             styleRecords.set(styleId, record);
+            saveRecords();
 
             return {
                 status: record.status,
