@@ -9,5 +9,14 @@ RUN npm install
 # Copy all application files
 COPY . .
 
-# Expose frontend (3000) and backend (4000) ports
-EXPOSE 3000 4000
+# Build the Vite frontend for production
+RUN npm run build
+
+# The Express server serves both the API and the built frontend
+# Default to port 3000 for production (overridable via PORT env var)
+ENV PORT=3000
+
+EXPOSE 3000
+
+# Start the Express backend which also serves the static frontend
+CMD ["npx", "tsx", "server/index.ts"]

@@ -1,30 +1,15 @@
 version: '3.8'
 
 services:
-  frontend:
+  # Production: single container serves both frontend + backend
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    command: npm run dev
     ports:
       - "3000:3000"
-    volumes:
-      - .:/app
-      - /app/node_modules
-    depends_on:
-      - backend
-    environment:
-      - CHOKIDAR_USEPOLLING=true
-
-  backend:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    command: npm run server
-    ports:
-      - "4000:4000"
-    volumes:
-      - .:/app
-      - /app/node_modules
     env_file:
       - .env.local
+    environment:
+      - PORT=3000
+    restart: unless-stopped
