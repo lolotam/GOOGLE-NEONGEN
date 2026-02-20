@@ -145,21 +145,27 @@ export async function submitTrainingJob(
 
     try {
         // Step 1: Compress images to ZIP
+        console.log(`[Training ${styleId}] Step 1: Compressing ${files.length} images...`);
         record.progress = 10;
         record.logs.push('Packaging images into archive...');
         const zipBuffer = await compressImagesToZip(files);
+        console.log(`[Training ${styleId}] ZIP ready: ${(zipBuffer.length / 1024 / 1024).toFixed(1)} MB`);
 
         // Step 2: Upload ZIP to fal.ai storage
+        console.log(`[Training ${styleId}] Step 2: Uploading to fal.ai storage...`);
         record.progress = 25;
         record.logs.push('Uploading archive to training servers...');
         const imageDataUrl = await uploadZipToFal(zipBuffer);
+        console.log(`[Training ${styleId}] Upload done: ${imageDataUrl}`);
 
         // Step 3: Submit training job to fal.ai queue
+        console.log(`[Training ${styleId}] Step 3: Submitting to fal-ai/flux-2-trainer...`);
         record.status = 'training';
         record.progress = 30;
-        record.logs.push('Training job submitted — waiting for resources...');
+        record.logs.push('Submitting training job...');
 
         const defaultCaption = buildDefaultCaption(styleType);
+        console.log(`[Training ${styleId}] Caption: "${defaultCaption}"`);
 
         const { request_id } = await fal.queue.submit(TRAINING_MODEL as string, {
             input: {
@@ -171,11 +177,14 @@ export async function submitTrainingJob(
             },
         });
 
+        console.log(`[Training ${styleId}] ✅ Submitted! fal request_id: ${request_id}`);
         record.falRequestId = request_id;
+        record.logs.push('Training job accepted — waiting for resources...');
         styleRecords.set(styleId, record);
 
         return record;
     } catch (error) {
+        console.error(`[Training ${styleId}] ❌ FAILED:`, error);
         record.status = 'failed';
         record.errorMessage = mapFalError(error);
         styleRecords.set(styleId, record);
