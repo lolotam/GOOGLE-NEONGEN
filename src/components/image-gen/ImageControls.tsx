@@ -1,20 +1,31 @@
 import { useImageStore } from '@/stores/imageStore';
 import { useStyleStore } from '@/stores/styleStore';
 import { geminiService } from '@/lib/api/gemini';
-import { Wand2, Image as ImageIcon, Sparkles, AlertCircle, Upload, X, User, Plus } from 'lucide-react';
+import { generateWithLoRA, listStyles } from '@/lib/api/fal';
+import type { FalImageSize, ServerStyleRecord } from '@/lib/api/fal';
+import {
+  Wand2, Image as ImageIcon, Sparkles, AlertCircle,
+  Upload, X, Plus, ChevronDown, ChevronUp, Zap
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 
 const aspectRatios = [
-  { label: '1:1', value: '1:1', icon: 'Square' },
-  { label: '16:9', value: '16:9', icon: 'Landscape' },
-  { label: '9:16', value: '9:16', icon: 'Portrait' },
-  { label: '4:3', value: '4:3', icon: 'Standard' },
-  { label: '3:4', value: '3:4', icon: 'Portrait 4:3' },
+  { label: '1:1', value: '1:1', falSize: 'square_hd' as FalImageSize },
+  { label: '16:9', value: '16:9', falSize: 'landscape_16_9' as FalImageSize },
+  { label: '9:16', value: '9:16', falSize: 'portrait_16_9' as FalImageSize },
+  { label: '4:3', value: '4:3', falSize: 'landscape_4_3' as FalImageSize },
+  { label: '3:4', value: '3:4', falSize: 'portrait_4_3' as FalImageSize },
 ];
 
 const models = [
+  {
+    id: 'flux-lora',
+    name: 'FLUX.1-dev (LoRA)',
+    badge: 'LoRA',
+    desc: 'Custom trained styles via fal.ai'
+  },
   {
     id: 'gemini-3-pro-image-preview',
     name: 'Gemini 3 Pro Image',
@@ -26,12 +37,18 @@ const models = [
     name: 'Gemini 2.5 Flash Image',
     badge: 'Fast',
     desc: 'Quick generation for rapid iteration'
-  }
+  },
 ];
 
+/** Maps between app aspect ratio values and fal.ai image_size presets */
+function getFalImageSize(ratio: string): FalImageSize {
+  const match = aspectRatios.find((r) => r.value === ratio);
+  return match?.falSize || 'square_hd';
+}
+
 export const ImageControls = () => {
-  const { 
-    prompt, setPrompt, 
+  const {
+    prompt, setPrompt,
     selectedModel, setSelectedModel,
     aspectRatio, setAspectRatio,
     referenceImage, setReferenceImage,
@@ -42,8 +59,37 @@ export const ImageControls = () => {
   const { profiles, getProfile } = useStyleStore();
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
 
+  // LoRA style selection (for FLUX model)
+  const [loraStyles, setLoraStyles] = useState<ServerStyleRecord[]>([]);
+  const [primaryStyleId, setPrimaryStyleId] = useState<string | null>(null);
+  const [referenceStyleId, setReferenceStyleId] = useState<string | null>(null);
+  const [stylesPanelOpen, setStylesPanelOpen] = useState(true);
+
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const isFluxModel = selectedModel === 'flux-lora';
+
+  // Fetch available LoRA styles from server when FLUX model is selected
+  useEffect(() => {
+    if (!isFluxModel) return;
+
+    let cancelled = false;
+    const fetchStyles = async () => {
+      try {
+        const styles = await listStyles();
+        if (!cancelled) {
+          setLoraStyles(styles.filter((s) => s.status === 'completed'));
+        }
+      } catch {
+        // Silently fail — server might not be running
+        if (!cancelled) setLoraStyles([]);
+      }
+    };
+
+    fetchStyles();
+    return () => { cancelled = true; };
+  }, [isFluxModel]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -52,7 +98,7 @@ export const ImageControls = () => {
     const reader = new FileReader();
     reader.onloadend = () => {
       setReferenceImage(reader.result as string);
-      setSelectedProfileId(null); // Clear profile if manual image uploaded
+      setSelectedProfileId(null);
     };
     reader.readAsDataURL(file);
   };
@@ -62,45 +108,70 @@ export const ImageControls = () => {
       setSelectedProfileId(null);
     } else {
       setSelectedProfileId(id);
-      setReferenceImage(null); // Clear manual image if profile selected
+      setReferenceImage(null);
     }
   };
 
+  /**
+   * Handles image generation.
+   * Routes to either fal.ai FLUX or Gemini based on selected model.
+   */
   const handleGenerate = async () => {
     if (!prompt.trim() || isGenerating) return;
-    
+
     setGenerating(true);
     setError(null);
 
     try {
-      let finalPrompt = prompt;
-      let refImg = referenceImage;
+      if (isFluxModel) {
+        // === FLUX.1-dev LoRA Generation ===
+        const result = await generateWithLoRA({
+          prompt: prompt.trim(),
+          primaryStyleId: primaryStyleId || undefined,
+          referenceStyleId: referenceStyleId || undefined,
+          imageSize: getFalImageSize(aspectRatio),
+          numImages: 1,
+        });
 
-      // If a profile is selected, enhance the prompt and use profile references
-      if (selectedProfileId) {
-        const profile = getProfile(selectedProfileId);
-        if (profile) {
-          finalPrompt = `${prompt}\n\nStyle/Character Context: ${profile.description}`;
-          // Use the first reference image from the profile as the main reference
-          // In a more advanced implementation, we might send multiple
-          if (profile.referenceImages.length > 0) {
-            refImg = profile.referenceImages[0];
+        result.images.forEach((img) => {
+          addImage({
+            id: crypto.randomUUID(),
+            url: img.url,
+            prompt: prompt,
+            model: 'FLUX.1-dev (LoRA)',
+            aspectRatio: aspectRatio,
+            timestamp: Date.now(),
+          });
+        });
+      } else {
+        // === Gemini Generation (existing flow) ===
+        let finalPrompt = prompt;
+        let refImg = referenceImage;
+
+        if (selectedProfileId) {
+          const profile = getProfile(selectedProfileId);
+          if (profile) {
+            finalPrompt = `${prompt}\n\nStyle/Character Context: ${profile.description}`;
+            if (profile.referenceImages.length > 0) {
+              refImg = profile.referenceImages[0];
+            }
           }
         }
-      }
 
-      const imageUrl = await geminiService.generateImage(selectedModel, finalPrompt, aspectRatio, refImg);
-      
-      addImage({
-        id: crypto.randomUUID(),
-        url: imageUrl,
-        prompt: prompt, // Store original prompt for display
-        model: selectedModel,
-        aspectRatio: aspectRatio,
-        timestamp: Date.now()
-      });
-    } catch (err: any) {
-      setError(err.message || "Failed to generate image");
+        const imageUrl = await geminiService.generateImage(selectedModel, finalPrompt, aspectRatio, refImg);
+
+        addImage({
+          id: crypto.randomUUID(),
+          url: imageUrl,
+          prompt: prompt,
+          model: selectedModel,
+          aspectRatio: aspectRatio,
+          timestamp: Date.now(),
+        });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to generate image';
+      setError(message);
     } finally {
       setGenerating(false);
     }
@@ -125,49 +196,133 @@ export const ImageControls = () => {
           />
         </div>
 
-        {/* Style/Character Profiles */}
-        <div className="space-y-2 mb-6">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-gray-400">Style Profile</label>
-            <Link to="/profiles/create" className="text-xs text-primary-neon hover:underline flex items-center gap-1">
-              <Plus className="w-3 h-3" /> New Profile
-            </Link>
-          </div>
-          
-          <div className="flex gap-2 overflow-x-auto pb-2">
-            {profiles.map(profile => (
-              <button
-                key={profile.id}
-                onClick={() => handleProfileSelect(profile.id)}
-                className={cn(
-                  "relative shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all",
-                  selectedProfileId === profile.id 
-                    ? "border-primary-neon" 
-                    : "border-white/10 hover:border-white/30"
-                )}
-                title={profile.name}
-              >
-                <img src={profile.thumbnail} alt={profile.name} className="w-full h-full object-cover" />
-                {selectedProfileId === profile.id && (
-                  <div className="absolute inset-0 bg-primary-neon/20 flex items-center justify-center">
-                    <Sparkles className="w-4 h-4 text-white drop-shadow-md" />
+        {/* ═══ FLUX LoRA Style Panel ═══ */}
+        {isFluxModel && (
+          <div className="space-y-2 mb-6">
+            <button
+              onClick={() => setStylesPanelOpen(!stylesPanelOpen)}
+              className="w-full flex items-center justify-between text-sm font-medium text-gray-400 hover:text-white transition-colors"
+            >
+              <span className="flex items-center gap-2">
+                <Zap className="w-4 h-4 text-primary-neon" />
+                Style Profiles
+              </span>
+              {stylesPanelOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+
+            {stylesPanelOpen && (
+              <div className="space-y-3 mt-2 p-3 bg-background-tertiary/50 rounded-xl border border-white/5">
+                {/* Primary Style */}
+                <div className="space-y-1">
+                  <label className="text-xs text-gray-500">Primary Style</label>
+                  <select
+                    value={primaryStyleId || ''}
+                    onChange={(e) => setPrimaryStyleId(e.target.value || null)}
+                    className="w-full bg-background-primary border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary-neon/50"
+                  >
+                    <option value="">None (base model)</option>
+                    {loraStyles.map((style) => (
+                      <option key={style.id} value={style.id}>
+                        {style.styleName} ({style.styleType})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Primary Style Thumbnail Preview */}
+                {primaryStyleId && (() => {
+                  const style = loraStyles.find((s) => s.id === primaryStyleId);
+                  return style?.thumbnail ? (
+                    <div className="flex items-center gap-2 p-2 bg-primary-neon/5 rounded-lg border border-primary-neon/10">
+                      <img src={style.thumbnail} alt="" className="w-8 h-8 rounded object-cover" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-primary-neon font-medium truncate">{style.styleName}</p>
+                        <p className="text-[10px] text-gray-500">Trigger: <code className="text-primary-neon">{style.triggerWord}</code></p>
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* Reference Style (secondary) */}
+                <div className="space-y-1">
+                  <label className="text-xs text-gray-500">Reference Style (optional)</label>
+                  <select
+                    value={referenceStyleId || ''}
+                    onChange={(e) => setReferenceStyleId(e.target.value || null)}
+                    className="w-full bg-background-primary border border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-primary-neon/50"
+                  >
+                    <option value="">None</option>
+                    {loraStyles
+                      .filter((s) => s.id !== primaryStyleId)
+                      .map((style) => (
+                        <option key={style.id} value={style.id}>
+                          {style.styleName} ({style.styleType})
+                        </option>
+                      ))}
+                  </select>
+                </div>
+
+                {loraStyles.length === 0 && (
+                  <div className="text-center py-3">
+                    <p className="text-xs text-gray-500 mb-2">No trained styles yet.</p>
+                    <Link
+                      to="/profiles/create"
+                      className="text-xs text-primary-neon hover:underline flex items-center justify-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" /> Train a new style
+                    </Link>
                   </div>
                 )}
-              </button>
-            ))}
-            {profiles.length === 0 && (
-               <div className="text-xs text-gray-500 italic p-2">No profiles created yet.</div>
+              </div>
             )}
           </div>
-        </div>
+        )}
 
-        {/* Manual Style Reference (Only if no profile selected) */}
-        {!selectedProfileId && (
+        {/* ═══ Gemini Style/Character Profiles ═══ */}
+        {!isFluxModel && (
+          <div className="space-y-2 mb-6">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-gray-400">Style Profile</label>
+              <Link to="/profiles/create" className="text-xs text-primary-neon hover:underline flex items-center gap-1">
+                <Plus className="w-3 h-3" /> New Profile
+              </Link>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pb-2">
+              {profiles.map(profile => (
+                <button
+                  key={profile.id}
+                  onClick={() => handleProfileSelect(profile.id)}
+                  className={cn(
+                    "relative shrink-0 w-16 h-16 rounded-lg overflow-hidden border-2 transition-all",
+                    selectedProfileId === profile.id
+                      ? "border-primary-neon"
+                      : "border-white/10 hover:border-white/30"
+                  )}
+                  title={profile.name}
+                >
+                  <img src={profile.thumbnail} alt={profile.name} className="w-full h-full object-cover" />
+                  {selectedProfileId === profile.id && (
+                    <div className="absolute inset-0 bg-primary-neon/20 flex items-center justify-center">
+                      <Sparkles className="w-4 h-4 text-white drop-shadow-md" />
+                    </div>
+                  )}
+                </button>
+              ))}
+              {profiles.length === 0 && (
+                <div className="text-xs text-gray-500 italic p-2">No profiles created yet.</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Manual Style Reference (Gemini models only, no profile selected) */}
+        {!isFluxModel && !selectedProfileId && (
           <div className="space-y-2 mb-6">
             <label className="text-sm font-medium text-gray-400 flex items-center justify-between">
               Manual Reference
               {referenceImage && (
-                <button 
+                <button
                   onClick={() => setReferenceImage(null)}
                   className="text-xs text-red-500 hover:text-red-400"
                 >
@@ -175,27 +330,27 @@ export const ImageControls = () => {
                 </button>
               )}
             </label>
-            
+
             {!referenceImage ? (
-              <div 
+              <div
                 onClick={() => fileInputRef.current?.click()}
                 className="w-full h-24 border border-dashed border-white/20 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-primary-neon/50 hover:bg-white/5 transition-all"
               >
                 <Upload className="w-5 h-5 text-gray-500 mb-2" />
                 <span className="text-xs text-gray-500">Upload image</span>
-                <input 
-                  type="file" 
+                <input
+                  type="file"
                   ref={fileInputRef}
-                  className="hidden" 
+                  className="hidden"
                   accept="image/*"
                   onChange={handleFileChange}
                 />
               </div>
             ) : (
               <div className="relative w-full h-32 rounded-xl overflow-hidden border border-primary-neon/30 group">
-                <img 
-                  src={referenceImage} 
-                  alt="Reference" 
+                <img
+                  src={referenceImage}
+                  alt="Reference"
                   className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent flex items-end p-3">
@@ -228,7 +383,12 @@ export const ImageControls = () => {
                   <span className={cn("font-medium text-sm", selectedModel === model.id ? "text-primary-neon" : "text-white")}>
                     {model.name}
                   </span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-gray-400">
+                  <span className={cn(
+                    "text-[10px] px-1.5 py-0.5 rounded",
+                    model.id === 'flux-lora'
+                      ? "bg-purple-500/20 text-purple-400"
+                      : "bg-white/10 text-gray-400"
+                  )}>
                     {model.badge}
                   </span>
                 </div>
