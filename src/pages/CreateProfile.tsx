@@ -201,7 +201,7 @@ export default function CreateProfile() {
   const currentMessage = currentStatusMessages[statusMessageIndex % currentStatusMessages.length];
 
   return (
-    <div className="min-h-screen p-6 lg:p-12 flex flex-col items-center">
+    <div className="h-[calc(100vh-4rem)] overflow-y-auto p-6 lg:p-12 flex flex-col items-center scrollbar-thin scrollbar-track-transparent scrollbar-thumb-white/10 hover:scrollbar-thumb-white/20">
       <div className="max-w-3xl w-full">
         {/* Header */}
         <div className="mb-8">

@@ -6,6 +6,7 @@
  *
  * Usage: npm run server (or: npx tsx server/index.ts)
  */
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { fal } from '@fal-ai/client';
@@ -16,12 +17,12 @@ const PORT = process.env.PORT || 4000;
 
 // Configure fal.ai client with API key from environment
 const falKey = process.env.FAL_KEY;
-if (!falKey) {
-    console.error('❌ FAL_KEY environment variable is required. Set it in .env.local');
-    process.exit(1);
+if (!falKey || falKey === 'YOUR_FAL_AI_API_KEY') {
+    console.warn('⚠️ WARNING: FAL_KEY environment variable is missing or placeholder.');
+    console.warn('   fal.ai LoRA training and generation will fail until you add it to .env.local');
+} else {
+    fal.config({ credentials: falKey });
 }
-
-fal.config({ credentials: falKey });
 
 const app = express();
 
