@@ -51,8 +51,8 @@ export default function AuthPage() {
                     {/* ===== LOGIN FRONT FACE ===== */}
                     <div
                         className={cn(
-                            "absolute inset-0 bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl p-8 sm:p-10 shadow-2xl shadow-black/50 backface-hidden",
-                            !isLogin && "pointer-events-none"
+                            "bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl p-8 sm:p-10 shadow-2xl shadow-black/50 backface-hidden",
+                            !isLogin && "absolute inset-0 pointer-events-none"
                         )}
                     >
                         {/* Logo */}
