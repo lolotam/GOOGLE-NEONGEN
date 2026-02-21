@@ -1,17 +1,10 @@
 version: '3.8'
 
 services:
-  # Production: single container serves both frontend + backend
   app:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
-    env_file:
-      - .env.local
-    volumes:
-      - ./data:/app/data
-    environment:
-      - PORT=3000
+      - "80:80"
     restart: unless-stopped

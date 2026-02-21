@@ -1,16 +1,15 @@
 /**
  * Frontend API wrapper for fal.ai LoRA training and image generation.
- * All calls are proxied through the Express backend at /api.
- * The fal.ai API key never reaches the browser.
+ * All calls go through Supabase Edge Functions and database.
+ * The fal.ai API key and Cloudinary secrets are stored as Supabase secrets.
  */
+import { supabase } from '@/lib/supabase';
+import type { StyleRow } from '@/lib/database.types';
 
-/** Standard API response envelope from backend */
+/** Standard API response envelope from edge functions */
 export interface ApiResponse<T> {
-    /** Whether the request succeeded */
     success: boolean;
-    /** Response payload (present on success) */
     data?: T;
-    /** Error message (present on failure) */
     error?: string;
 }
 
@@ -28,23 +27,6 @@ export type FalImageSize =
     | 'portrait_16_9'
     | 'landscape_4_3'
     | 'landscape_16_9';
-
-/** Style record returned from the server */
-export interface ServerStyleRecord {
-    id: string;
-    styleName: string;
-    styleType: StyleType;
-    triggerWord: string;
-    status: TrainingStatus;
-    progress: number;
-    loraUrl?: string;
-    configUrl?: string;
-    thumbnail?: string;
-    imageCount: number;
-    logs: string[];
-    createdAt: number;
-    errorMessage?: string;
-}
 
 /** Response from training submission */
 export interface TrainResponse {
@@ -87,36 +69,58 @@ export interface GenerateResponse {
     seed: number;
 }
 
+/** Re-export StyleRow for convenience */
+export type ServerStyleRecord = StyleRow;
+
+/**
+ * Helper: get current session token for edge function auth
+ */
+async function getAuthToken(): Promise<string> {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+        throw new Error('Not authenticated. Please sign in.');
+    }
+    return session.access_token;
+}
+
 /**
  * Submits a LoRA training job with uploaded images.
- *
- * @param formData - FormData with images[], styleName, and styleType
- * @returns Promise with jobId and triggerWord ('ohwx')
+ * Calls the train-style edge function with auth.
  */
 export async function trainLoRA(formData: FormData): Promise<TrainResponse> {
-    const res = await fetch('/api/styles/train', {
-        method: 'POST',
+    const token = await getAuthToken();
+
+    const { data, error } = await supabase.functions.invoke('train-style', {
         body: formData,
+        headers: { Authorization: `Bearer ${token}` },
     });
 
-    const json = (await res.json()) as ApiResponse<TrainResponse>;
+    if (error) throw new Error(error.message || 'Training submission failed');
 
-    if (!json.success || !json.data) {
-        throw new Error(json.error || 'Training submission failed');
+    const response = data as ApiResponse<TrainResponse>;
+    if (!response.success || !response.data) {
+        throw new Error(response.error || 'Training submission failed');
     }
 
-    return json.data;
+    return response.data;
 }
 
 /**
  * Polls the training status for a given job ID.
- * Returns status, progress, logs, and optionally loraUrl/triggerWord on completion.
- *
- * @param jobId - The training job ID returned from trainLoRA
- * @returns Current training status with progress, logs, and optional LoRA URL
+ * Uses direct fetch to pass query params to edge function.
  */
 export async function pollTrainingStatus(jobId: string): Promise<TrainingStatusResponse> {
-    const res = await fetch(`/api/styles/train/${jobId}/status`);
+    const token = await getAuthToken();
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    const res = await fetch(`${supabaseUrl}/functions/v1/poll-training?jobId=${jobId}`, {
+        headers: {
+            Authorization: `Bearer ${token}`,
+            apikey: anonKey,
+        },
+    });
+
     const json = (await res.json()) as ApiResponse<TrainingStatusResponse>;
 
     if (!json.success || !json.data) {
@@ -128,52 +132,48 @@ export async function pollTrainingStatus(jobId: string): Promise<TrainingStatusR
 
 /**
  * Generates images using FLUX.1-dev with optional LoRA styles.
- *
- * @param request - Generation request with prompt, style IDs, and settings
- * @returns Generated image URLs and metadata
+ * Calls the generate-image edge function with auth.
  */
 export async function generateWithLoRA(request: GenerateRequest): Promise<GenerateResponse> {
-    const res = await fetch('/api/images/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
+    const token = await getAuthToken();
+
+    const { data, error } = await supabase.functions.invoke('generate-image', {
+        body: request,
+        headers: { Authorization: `Bearer ${token}` },
     });
 
-    const json = (await res.json()) as ApiResponse<GenerateResponse>;
+    if (error) throw new Error(error.message || 'Image generation failed');
 
-    if (!json.success || !json.data) {
-        throw new Error(json.error || 'Image generation failed');
+    const response = data as ApiResponse<GenerateResponse>;
+    if (!response.success || !response.data) {
+        throw new Error(response.error || 'Image generation failed');
     }
 
-    return json.data;
+    return response.data;
 }
 
 /**
- * Fetches all trained styles from the server.
- *
- * @returns Array of ServerStyleRecord sorted by creation date (newest first)
+ * Fetches all styles for the current user from the Supabase database.
+ * RLS ensures only the user's own styles are returned.
  */
-export async function listStyles(): Promise<ServerStyleRecord[]> {
-    const res = await fetch('/api/styles');
-    const json = (await res.json()) as ApiResponse<ServerStyleRecord[]>;
+export async function listStyles(): Promise<StyleRow[]> {
+    const { data, error } = await supabase
+        .from('styles')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    if (!json.success || !json.data) {
-        throw new Error(json.error || 'Failed to list styles');
-    }
-
-    return json.data;
+    if (error) throw new Error(error.message || 'Failed to list styles');
+    return data || [];
 }
 
 /**
- * Deletes a style record from the server.
- *
- * @param styleId - The style ID to delete
+ * Deletes a style record (only the user's own via RLS).
  */
 export async function deleteStyle(styleId: string): Promise<void> {
-    const res = await fetch(`/api/styles/${styleId}`, { method: 'DELETE' });
-    const json = (await res.json()) as ApiResponse<{ deleted: boolean }>;
+    const { error } = await supabase
+        .from('styles')
+        .delete()
+        .eq('id', styleId);
 
-    if (!json.success) {
-        throw new Error(json.error || 'Failed to delete style');
-    }
+    if (error) throw new Error(error.message || 'Failed to delete style');
 }

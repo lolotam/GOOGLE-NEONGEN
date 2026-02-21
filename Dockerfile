@@ -1,22 +1,30 @@
-FROM node:22-alpine
+# Build stage — create production Vite bundle
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# Install dependencies
-COPY package*.json ./
-RUN npm install
+COPY package.json package-lock.json* ./
+RUN npm ci
 
-# Copy all application files
 COPY . .
-
-# Build the Vite frontend for production
 RUN npm run build
 
-# The Express server serves both the API and the built frontend
-# Default to port 3000 for production (overridable via PORT env var)
-ENV PORT=3000
+# Production stage — serve static files with nginx
+FROM nginx:alpine
 
-EXPOSE 3000
+# Copy built frontend
+COPY --from=build /app/dist /usr/share/nginx/html
 
-# Start the Express backend which also serves the static frontend
-CMD ["npx", "tsx", "server/index.ts"]
+# SPA routing: redirect all paths to index.html
+RUN echo 'server { \
+    listen 80; \
+    server_name _; \
+    root /usr/share/nginx/html; \
+    index index.html; \
+    location / { \
+    try_files $uri $uri/ /index.html; \
+    } \
+    }' > /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]

@@ -223,7 +223,7 @@ export const ImageControls = () => {
                     <option value="">None (base model)</option>
                     {loraStyles.map((style) => (
                       <option key={style.id} value={style.id}>
-                        {style.styleName} ({style.styleType})
+                        {style.style_name} ({style.style_type})
                       </option>
                     ))}
                   </select>
@@ -232,12 +232,12 @@ export const ImageControls = () => {
                 {/* Primary Style Thumbnail Preview */}
                 {primaryStyleId && (() => {
                   const style = loraStyles.find((s) => s.id === primaryStyleId);
-                  return style?.thumbnail ? (
+                  return style?.thumbnail_url ? (
                     <div className="flex items-center gap-2 p-2 bg-primary-neon/5 rounded-lg border border-primary-neon/10">
-                      <img src={style.thumbnail} alt="" className="w-8 h-8 rounded object-cover" />
+                      <img src={style.thumbnail_url} alt="" className="w-8 h-8 rounded object-cover" />
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs text-primary-neon font-medium truncate">{style.styleName}</p>
-                        <p className="text-[10px] text-gray-500">Trigger: <code className="text-primary-neon">{style.triggerWord}</code></p>
+                        <p className="text-xs text-primary-neon font-medium truncate">{style.style_name}</p>
+                        <p className="text-[10px] text-gray-500">Trigger: <code className="text-primary-neon">{style.trigger_word}</code></p>
                       </div>
                     </div>
                   ) : null;
@@ -256,7 +256,7 @@ export const ImageControls = () => {
                       .filter((s) => s.id !== primaryStyleId)
                       .map((style) => (
                         <option key={style.id} value={style.id}>
-                          {style.styleName} ({style.styleType})
+                          {style.style_name} ({style.style_type})
                         </option>
                       ))}
                   </select>
