@@ -11,6 +11,8 @@ export interface AuthState {
     session: Session | null;
     loading: boolean;
     signInWithGoogle: () => Promise<void>;
+    signInWithEmail: (email: string, password: string) => Promise<void>;
+    signUpWithEmail: (email: string, password: string) => Promise<void>;
     signOut: () => Promise<void>;
 }
 
@@ -49,10 +51,20 @@ export function useAuth(): AuthState {
         if (error) throw error;
     }, []);
 
+    const signInWithEmail = useCallback(async (email: string, password: string) => {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+    }, []);
+
+    const signUpWithEmail = useCallback(async (email: string, password: string) => {
+        const { error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } });
+        if (error) throw error;
+    }, []);
+
     const signOut = useCallback(async () => {
         const { error } = await supabase.auth.signOut();
         if (error) throw error;
     }, []);
 
-    return { user, session, loading, signInWithGoogle, signOut };
+    return { user, session, loading, signInWithGoogle, signInWithEmail, signUpWithEmail, signOut };
 }
